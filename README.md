@@ -121,3 +121,6 @@ This project is licensed under the [MIT License](LICENSE).
 
 <!-- handsoff-issue-558 -->
 - #558: [Enhancement] resume_subscription publishes the SubscriptionResumed event twice on every call
+
+<!-- handsoff-issue-567 -->
+- #567: [Enhancement] sweep_platform_fees can sweep tokens that are already owed to merchants as unclaimed fee rebates
