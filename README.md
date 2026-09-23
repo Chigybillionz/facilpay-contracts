@@ -124,3 +124,6 @@ This project is licensed under the [MIT License](LICENSE).
 
 <!-- handsoff-issue-567 -->
 - #567: [Enhancement] sweep_platform_fees can sweep tokens that are already owed to merchants as unclaimed fee rebates
+
+<!-- handsoff-issue-576 -->
+- #576: [Enhancement] Pause enforcement covers only 5 of the refund contract's state-changing entry points — arbitration, vouchers, batch ops, and admin override bypass it entirely
