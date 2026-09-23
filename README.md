@@ -116,3 +116,8 @@ Recommended migration path:
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
+
+## Handsoff notes
+
+<!-- handsoff-issue-558 -->
+- #558: [Enhancement] resume_subscription publishes the SubscriptionResumed event twice on every call
