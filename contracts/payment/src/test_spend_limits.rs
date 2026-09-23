@@ -106,3 +106,132 @@ fn test_period_auto_reset() {
     // After period reset, full limit is available again
     assert!(client.check_spend_allowance(&customer, &1000));
 }
+
+#[test]
+fn test_spend_limit_restored_on_cancel() {
+    let (env, client, admin) = setup();
+    let customer = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    let token_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
+    token.mint(&customer, &10_000);
+
+    client.set_customer_spend_limit(&admin, &customer, &1000, &3600);
+
+    let payment_id = client.create_payment(
+        &customer,
+        &merchant,
+        &400,
+        &token_addr,
+        &Currency::USDC,
+        &0,
+        &soroban_sdk::String::from_str(&env, ""),
+    );
+
+    // Creation consumed allowance
+    assert_eq!(client.get_spend_limit(&customer).unwrap().used, 400);
+
+    // Cancelling the payment restores the consumed allowance
+    client.cancel_payment(&merchant, &payment_id);
+    assert_eq!(client.get_spend_limit(&customer).unwrap().used, 0);
+}
+
+#[test]
+fn test_spend_limit_restored_on_expire() {
+    let (env, client, admin) = setup();
+    let customer = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    let token_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
+    token.mint(&customer, &10_000);
+
+    client.set_customer_spend_limit(&admin, &customer, &1000, &3600);
+
+    // Create a payment that expires in the future
+    let payment_id = client.create_payment(
+        &customer,
+        &merchant,
+        &300,
+        &token_addr,
+        &Currency::USDC,
+        &100,
+        &soroban_sdk::String::from_str(&env, ""),
+    );
+    assert_eq!(client.get_spend_limit(&customer).unwrap().used, 300);
+
+    // Advance past the expiry and expire the payment
+    env.ledger().with_mut(|l| l.timestamp = 200);
+    client.expire_payment(&payment_id);
+
+    assert_eq!(client.get_spend_limit(&customer).unwrap().used, 0);
+}
+
+#[test]
+fn test_spend_limit_restored_on_refund() {
+    let (env, client, admin) = setup();
+    let customer = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    let token_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
+    token.mint(&customer, &10_000);
+
+    client.set_customer_spend_limit(&admin, &customer, &1000, &3600);
+
+    let payment_id = client.create_payment(
+        &customer,
+        &merchant,
+        &250,
+        &token_addr,
+        &Currency::USDC,
+        &0,
+        &soroban_sdk::String::from_str(&env, ""),
+    );
+    assert_eq!(client.get_spend_limit(&customer).unwrap().used, 250);
+
+    // Refunding the payment restores the consumed allowance
+    client.refund_payment(&merchant, &payment_id);
+    assert_eq!(client.get_spend_limit(&customer).unwrap().used, 0);
+}
+
+#[test]
+fn test_spend_limit_restore_bounded_at_zero() {
+    let (env, client, admin) = setup();
+    let customer = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    let token_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
+    token.mint(&customer, &10_000);
+
+    client.set_customer_spend_limit(&admin, &customer, &1000, &3600);
+
+    let payment_id = client.create_payment(
+        &customer,
+        &merchant,
+        &100,
+        &token_addr,
+        &Currency::USDC,
+        &0,
+        &soroban_sdk::String::from_str(&env, ""),
+    );
+    assert_eq!(client.get_spend_limit(&customer).unwrap().used, 100);
+
+    // Cancel restores usage to zero
+    client.cancel_payment(&merchant, &payment_id);
+    assert_eq!(client.get_spend_limit(&customer).unwrap().used, 0);
+
+    // A second restore attempt must not push usage below zero
+    client.cancel_payment(&merchant, &payment_id);
+    assert_eq!(client.get_spend_limit(&customer).unwrap().used, 0);
+}
