@@ -4,7 +4,7 @@
 use escrow::EscrowContractClient;
 use soroban_sdk::{
     contract, contracterror, contractevent, contractimpl, contracttype, token, xdr::ToXdr, Address,
-    Bytes, BytesN, Env, String, Symbol, TryFromVal, Val, Vec,
+    Bytes, BytesN, Env, IntoVal, String, Symbol, TryFromVal, Val, Vec,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -7747,7 +7747,13 @@ impl PaymentContract {
     }
 
     /// Calculates the fee for a given amount and merchant (accounting for tier discount and waivers).
-    pub fn calculate_fee(env: Env, amount: i128, merchant: Address) -> i128 {
+    pub fn calculate_fee(
+        env: Env,
+        amount: i128,
+        merchant: Address,
+        customer: Address,
+        currency: Currency,
+    ) -> i128 {
         let config: Option<FeeConfig> = env
             .storage()
             .instance()
@@ -8977,85 +8983,21 @@ impl PaymentContract {
                 );
             }
 
-            // Deduct fee
-            let (net_amount, fee_amount) = PaymentContract::deduct_fee(
-                &env,
-                payment_id,
-                entry.amount,
-                entry.merchant.clone(),
-                &entry.token,
-                &entry.customer,
-                entry.currency.clone(),
-            );
-
-            // Transfer from customer to contract
-            let token_client = token::Client::new(&env, &entry.token);
-            token_client.transfer_from(
-                &contract_address,
-                &entry.customer,
-                &contract_address,
-                &net_amount,
-            );
-
-            // Update merchant fee record
-            PaymentContract::update_merchant_fee_record_post_completion(
-                &env,
-                entry.merchant.clone(),
-                entry.amount,
-                fee_amount,
-            );
-
-            // Update analytics
-            let mut analytics: PaymentAnalytics = env
-                .storage()
-                .instance()
-                .get(&DataKey::Feature(FeatureKey::PaymentAnalytics))
-                .unwrap_or(PaymentAnalytics {
-                    total_payments_created: 0,
-                    total_payments_completed: 0,
-                    total_payments_cancelled: 0,
-                    total_payments_refunded: 0,
-                    total_volume: 0,
-                    total_refunded_volume: 0,
-                    unique_customers: 0,
-                    unique_merchants: 0,
-                });
-            analytics.total_payments_completed += 1;
-            env.storage()
-                .instance()
-                .set(&DataKey::Feature(FeatureKey::PaymentAnalytics), &analytics);
-            let mut m_analytics: MerchantAnalytics = env
-                .storage()
-                .instance()
-                .get(&DataKey::Merchant(MerchantDataKey::Analytics(
-                    entry.merchant.clone(),
-                )))
-                .unwrap_or(MerchantAnalytics {
-                    total_payments: 0,
-                    total_volume: 0,
-                    total_completed: 0,
-                    total_cancelled: 0,
-                    total_refunded: 0,
-                    total_refunded_volume: 0,
-                });
-            m_analytics.total_completed += 1;
-            env.storage().instance().set(
-                &DataKey::Merchant(MerchantDataKey::Analytics(entry.merchant.clone())),
-                &m_analytics,
-            );
-
-            // Add to group
-            let mut found = false;
-            for i in 0..groups.len() {
-                let (t, m, sum) = groups.get(i).unwrap();
-                if t == entry.token && m == entry.merchant {
-                    groups.set(i, (t, m, sum + net_amount));
-                    found = true;
-                    break;
-                }
-            }
-            if !found {
-                groups.push_back((entry.token.clone(), entry.merchant.clone(), net_amount));
+            // Complete through the shared path so the platform fee (including
+            // the risk surcharge), finality-delay hold, payment forwarding,
+            // loyalty accrual, fee-rebate accrual, auto-escrow and analytics
+            // are all applied — identical to a normal payment completion.
+            match PaymentContract::do_complete_payment(&env, payment_id) {
+                Ok(()) => results.push_back(BatchResult {
+                    payment_id,
+                    success: true,
+                    error_code: None,
+                }),
+                Err(e) => results.push_back(BatchResult {
+                    payment_id,
+                    success: false,
+                    error_code: Some(e.to_u32()),
+                }),
             }
         }
 
@@ -12654,8 +12596,7 @@ impl PaymentContract {
 
     /// Executes a payment using the provided route.
     /// Validates the route is still valid (fee_bps matches current config) before executing.
-    pub fn // Fixed issue 565
-    // execute_routed_payment(
+    pub fn execute_routed_payment(
         env: Env,
         customer: Address,
         merchant: Address,
